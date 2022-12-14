@@ -21,8 +21,8 @@ import {
   CreatePaymentCollectionInput,
   PaymentCollectionsSessionsBatchInput,
   PaymentCollectionsSessionsInput,
-  PaymentProviderDataInput,
 } from "../types/payment-collection"
+import { CreatePaymentInput, PaymentSessionInput } from "../types/payment"
 
 type InjectedDependencies = {
   manager: EntityManager
@@ -187,10 +187,10 @@ export default class PaymentCollectionService extends TransactionBaseService {
       }
 
       if (
-        [
+        ![
           PaymentCollectionStatus.CANCELED,
           PaymentCollectionStatus.NOT_PAID,
-        ].includes(paymentCollection.status) === false
+        ].includes(paymentCollection.status)
       ) {
         throw new MedusaError(
           MedusaError.Types.NOT_ALLOWED,
@@ -266,6 +266,8 @@ export default class PaymentCollectionService extends TransactionBaseService {
             })
             .catch(() => null)
 
+      const paymentProviderTx =
+        this.paymentProviderService_.withTransaction(manager)
       const selectedSessionIds: string[] = []
       const paymentSessions: PaymentSession[] = []
 
@@ -274,7 +276,14 @@ export default class PaymentCollectionService extends TransactionBaseService {
           (sess) => session.session_id === sess?.id
         )
 
-        const inputData = {
+        const inputData: PaymentSessionInput = {
+          cart: {
+            email: customer?.email || "",
+            context: {},
+            shipping_methods: [],
+            shipping_address: null,
+            id: "",
+          },
           resource_id: payCol.id,
           currency_code: payCol.currency_code,
           amount: session.amount,
@@ -283,16 +292,17 @@ export default class PaymentCollectionService extends TransactionBaseService {
         }
 
         if (existingSession) {
-          const paymentSession = await this.paymentProviderService_
-            .withTransaction(manager)
-            .updateSessionNew(existingSession, inputData)
+          const paymentSession = await paymentProviderTx.updateSession(
+            existingSession,
+            inputData
+          )
 
           selectedSessionIds.push(existingSession.id)
           paymentSessions.push(paymentSession)
         } else {
-          const paymentSession = await this.paymentProviderService_
-            .withTransaction(manager)
-            .createSessionNew(inputData)
+          const paymentSession = await paymentProviderTx.createSession(
+            inputData
+          )
 
           selectedSessionIds.push(paymentSession.id)
           paymentSessions.push(paymentSession)
@@ -305,15 +315,16 @@ export default class PaymentCollectionService extends TransactionBaseService {
         )
 
         if (removeSessions.length) {
-          await paymentCollectionRepository.deleteMultiple(
+          await paymentCollectionRepository.delete(
             removeSessions.map((sess) => sess.id)
           )
 
+          const paymentProviderTx =
+            this.paymentProviderService_.withTransaction(manager)
+
           Promise.all(
             removeSessions.map(async (sess) =>
-              this.paymentProviderService_
-                .withTransaction(manager)
-                .deleteSessionNew(sess)
+              paymentProviderTx.deleteSession(sess)
             )
           ).catch(() => void 0)
         }
@@ -328,7 +339,7 @@ export default class PaymentCollectionService extends TransactionBaseService {
   /**
    * Manages a single payment sessions of a payment collection.
    * @param paymentCollectionId - the id of the payment collection
-   * @param sessionsInput - object containing payment session info
+   * @param sessionInput - object containing payment session info
    * @param customerId - the id of the customer
    * @return the payment collection and its payment session.
    */
@@ -374,7 +385,15 @@ export default class PaymentCollectionService extends TransactionBaseService {
             .catch(() => null)
 
       const paymentSessions: PaymentSession[] = []
-      const inputData = {
+
+      const inputData: PaymentSessionInput = {
+        cart: {
+          email: customer?.email || "",
+          context: {},
+          shipping_methods: [],
+          shipping_address: null,
+          id: "",
+        },
         resource_id: payCol.id,
         currency_code: payCol.currency_code,
         amount: payCol.amount,
@@ -389,13 +408,13 @@ export default class PaymentCollectionService extends TransactionBaseService {
       if (existingSession) {
         const paymentSession = await this.paymentProviderService_
           .withTransaction(manager)
-          .updateSessionNew(existingSession, inputData)
+          .updateSession(existingSession, inputData)
 
         paymentSessions.push(paymentSession)
       } else {
         const paymentSession = await this.paymentProviderService_
           .withTransaction(manager)
-          .createSessionNew(inputData)
+          .createSession(inputData)
 
         paymentSessions.push(paymentSession)
 
@@ -404,15 +423,16 @@ export default class PaymentCollectionService extends TransactionBaseService {
         )
 
         if (removeSessions.length) {
-          await paymentCollectionRepository.deleteMultiple(
+          await paymentCollectionRepository.delete(
             removeSessions.map((sess) => sess.id)
           )
 
+          const paymentProviderTx =
+            this.paymentProviderService_.withTransaction(manager)
+
           Promise.all(
             removeSessions.map(async (sess) =>
-              this.paymentProviderService_
-                .withTransaction(manager)
-                .deleteSessionNew(sess)
+              paymentProviderTx.deleteSession(sess)
             )
           ).catch(() => void 0)
         }
@@ -480,7 +500,14 @@ export default class PaymentCollectionService extends TransactionBaseService {
             })
             .catch(() => null)
 
-      const inputData = {
+      const inputData: PaymentSessionInput = {
+        cart: {
+          email: customer?.email || "",
+          context: {},
+          shipping_methods: [],
+          shipping_address: null,
+          id: "",
+        },
         resource_id: payCol.id,
         currency_code: payCol.currency_code,
         amount: session.amount,
@@ -490,7 +517,7 @@ export default class PaymentCollectionService extends TransactionBaseService {
 
       const sessionRefreshed = await this.paymentProviderService_
         .withTransaction(manager)
-        .refreshSessionNew(session, inputData)
+        .refreshSession(session, inputData)
 
       payCol.payment_sessions = payCol.payment_sessions.map((sess) => {
         if (sess.id === sessionId) {
@@ -574,6 +601,9 @@ export default class PaymentCollectionService extends TransactionBaseService {
         )
       }
 
+      const paymentProviderTx =
+        this.paymentProviderService_.withTransaction(manager)
+
       let authorizedAmount = 0
       for (let i = 0; i < payCol.payment_sessions.length; i++) {
         const session = payCol.payment_sessions[i]
@@ -587,9 +617,7 @@ export default class PaymentCollectionService extends TransactionBaseService {
           continue
         }
 
-        const auth = await this.paymentProviderService_
-          .withTransaction(manager)
-          .authorizePayment(session, context)
+        const auth = await paymentProviderTx.authorizePayment(session, context)
 
         if (auth) {
           payCol.payment_sessions[i] = auth
@@ -598,9 +626,7 @@ export default class PaymentCollectionService extends TransactionBaseService {
         if (auth?.status === PaymentSessionStatus.AUTHORIZED) {
           authorizedAmount += session.amount
 
-          const inputData: Omit<PaymentProviderDataInput, "customer"> & {
-            payment_session: PaymentSession
-          } = {
+          const inputData: CreatePaymentInput = {
             amount: session.amount,
             currency_code: payCol.currency_code,
             provider_id: session.provider_id,
@@ -608,11 +634,7 @@ export default class PaymentCollectionService extends TransactionBaseService {
             payment_session: auth,
           }
 
-          payCol.payments.push(
-            await this.paymentProviderService_
-              .withTransaction(manager)
-              .createPaymentNew(inputData)
-          )
+          payCol.payments.push(await paymentProviderTx.createPayment(inputData))
         }
       }
 

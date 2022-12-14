@@ -28,7 +28,12 @@ import {
   LineItemUpdate,
   LineItemValidateData,
 } from "../types/cart"
-import { AddressPayload, FindConfig, TotalField, WithRequiredProperty, } from "../types/common"
+import {
+  AddressPayload,
+  FindConfig,
+  TotalField,
+  WithRequiredProperty,
+} from "../types/common"
 import { buildQuery, isDefined, setMetadata } from "../utils"
 import { FlagRouter } from "../utils/flag-router"
 import { validateEmail } from "../utils/is-email"
@@ -1667,6 +1672,12 @@ class CartService extends TransactionBaseService {
         )
 
         const { total, region } = cart
+        const partialSessionInput: Omit<PaymentSessionInput, "provider_id"> = {
+          cart: cart as Cart,
+          customer: cart.customer,
+          amount: cart.total,
+          currency_code: cart.region.currency_code,
+        }
 
         // If there are existing payment sessions ensure that these are up to date
         const seen: string[] = []
@@ -1684,19 +1695,18 @@ class CartService extends TransactionBaseService {
                   .deleteSession(paymentSession)
               } else {
                 seen.push(paymentSession.provider_id)
+
+                const paymentSessionInput = {
+                  ...partialSessionInput,
+                  provider_id: paymentSession.provider_id,
+                }
+
                 return this.paymentProviderService_
                   .withTransaction(transactionManager)
-                  .updateSession(paymentSession, cart)
+                  .updateSession(paymentSession, paymentSessionInput)
               }
             })
           )
-        }
-
-        const partialSessionInput: Omit<PaymentSessionInput, "provider_id"> = {
-          cart: cart as Cart,
-          customer: cart.customer,
-          amount: cart.total,
-          currency_code: cart.region.currency_code,
         }
 
         if (total > 0) {
@@ -1798,7 +1808,7 @@ class CartService extends TransactionBaseService {
   ): Promise<Cart> {
     return await this.atomicPhase_(
       async (transactionManager: EntityManager) => {
-        const cart = await this.retrieve(cartId, {
+        const cart = await this.retrieveWithTotals(cartId, {
           relations: ["payment_sessions"],
         })
 
@@ -1811,7 +1821,13 @@ class CartService extends TransactionBaseService {
             // Delete the session with the provider
             await this.paymentProviderService_
               .withTransaction(transactionManager)
-              .refreshSession(paymentSession, cart)
+              .refreshSession(paymentSession, {
+                cart: cart as Cart,
+                customer: cart.customer,
+                amount: cart.total,
+                currency_code: cart.region.currency_code,
+                provider_id: providerId,
+              })
           }
         }
 
